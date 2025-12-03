@@ -1696,14 +1696,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-```
-
-### Updated `requirements.txt`
-```
-scapy>=2.5.0
-rich>=13.0.0
-pyfiglet>=0.8.0
-nvdlib>=0.7.0
-customtkinter>=5.2.0
-tkinterdnd2>=0.3.0
-win10toast>=0.9; sys_platform == 'win32'
