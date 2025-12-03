@@ -6,6 +6,7 @@ Thin wrapper around scanner.py for GUI integration
 import threading
 import queue
 import time
+import concurrent.futures
 from typing import Callable, Dict, List, Optional, Any
 import sys
 
@@ -168,73 +169,65 @@ class EngineAdapter:
                     )
                 scan_type = "connect"
             
-            # Use multithreading for faster scanning
+            # Use proper thread pool
             total_scans = len(targets) * len(ports)
             scans_completed = 0
             completed_lock = threading.Lock()
             
-            def scan_target_worker(target):
-                """Worker function for each target"""
+            def scan_single(target, port):
+                """Scan a single target:port combination"""
                 nonlocal scans_completed
                 
-                for port in ports:
+                if self.stop_flag.is_set():
+                    return None
+                
+                result = self._scan_single_port(
+                    target, port, scan_type, service_detection, timeout
+                )
+                
+                with completed_lock:
+                    scans_completed += 1
+                    progress = (scans_completed / total_scans) * 100
+                
+                if self.on_result_callback:
+                    try:
+                        self.on_result_callback({
+                            "type": "progress",
+                            "progress": progress,
+                            "completed": scans_completed,
+                            "total": total_scans
+                        })
+                    except Exception as e:
+                        print(f"Error reporting progress: {e}")
+                
+                return result
+            
+            # Create all target:port combinations
+            scan_tasks = [(target, port) for target in targets for port in ports]
+            
+            # Use ThreadPoolExecutor for proper thread management
+            with concurrent.futures.ThreadPoolExecutor(max_workers=threads) as executor:
+                # Submit all tasks
+                future_to_scan = {
+                    executor.submit(scan_single, target, port): (target, port)
+                    for target, port in scan_tasks
+                }
+                
+                # Process completed scans
+                for future in concurrent.futures.as_completed(future_to_scan):
                     if self.stop_flag.is_set():
+                        executor.shutdown(wait=False, cancel_futures=True)
                         break
                     
-                    result = self._scan_single_port(
-                        target, port, scan_type, service_detection, timeout
-                    )
-                    
-                    with completed_lock:
-                        scans_completed += 1
-                        progress = (scans_completed / total_scans) * 100
-                    
-                    if self.on_result_callback:
-                        try:
-                            self.on_result_callback({
-                                "type": "progress",
-                                "progress": progress,
-                                "completed": scans_completed,
-                                "total": total_scans
-                            })
-                        except Exception as e:
-                            print(f"Error reporting progress: {e}")
-                    
-                    if result:
-                        if self.on_result_callback:
+                    try:
+                        result = future.result()
+                        if result and self.on_result_callback:
                             try:
                                 self.on_result_callback(result)
                             except Exception as e:
                                 print(f"Error in result callback: {e}")
-            
-            # Create and start worker threads
-            scan_threads = []
-            max_threads = min(threads, len(targets))
-            
-            targets_per_thread = len(targets) // max_threads
-            remainder = len(targets) % max_threads
-            
-            start_idx = 0
-            for i in range(max_threads):
-                end_idx = start_idx + targets_per_thread + (1 if i < remainder else 0)
-                thread_targets = targets[start_idx:end_idx]
-                
-                for target in thread_targets:
-                    if self.stop_flag.is_set():
-                        break
-                    
-                    thread = threading.Thread(
-                        target=scan_target_worker,
-                        args=(target,),
-                        daemon=True
-                    )
-                    scan_threads.append(thread)
-                    thread.start()
-                
-                start_idx = end_idx
-            
-            for thread in scan_threads:
-                thread.join()
+                    except Exception as e:
+                        print(f"Scan task error: {e}")
             
             if self.on_complete_callback and not self.stop_flag.is_set():
                 try:
