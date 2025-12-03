@@ -267,7 +267,8 @@ class EngineAdapter:
                     target, port, service_detection
                 )
                 
-                if result and result.get("state") == "open":
+                # FIX: scanner.py returns 'OPEN' (uppercase), so check uppercase
+                if result and result.get("state", "").upper() == "OPEN":
                     return {
                         "type": "result",
                         "host": target,
@@ -294,7 +295,9 @@ class EngineAdapter:
                     scanType=scan_type
                 )
                 
-                if result and result.get("state") in ["open", "open|filtered"]:
+                # FIX: Case-insensitive check for state
+                state = result.get("state", "").upper() if result else ""
+                if state in ["OPEN", "OPEN|FILTERED"]:
                     service = "unknown"
                     banner = ""
                     
